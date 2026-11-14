@@ -1,11 +1,7 @@
-# harness-iagen-sudoku
+# harness-ia-sudoku
 Harness de Sudoku para el curso IIC3694-1 Inteligencia Artificial Generativa.
 
 Hay una versión del harness para Google Colab en `Colab_Sudoku.ipynb`.
-
-# Compilar el LATEX:
-cd informe_IIC3694
-latexmk -pdf -interaction=nonstopmode -halt-on-error informe.tex
 
 # Requerimientos
 Python 3.13.x de 64 bits, se recomienda entorno virtual.

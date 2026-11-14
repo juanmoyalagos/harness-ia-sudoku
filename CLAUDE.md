@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Sudoku evaluation harness for the course IIC3694-1 (Inteligencia Artificial Generativa): it loads a local Qwen model (default `Qwen/Qwen3.5-2B`), prompts it to solve a Sudoku, and verifies the answer. `informe_IIC3694/` holds the LaTeX report; `Documentos Curso/` holds reference PDFs; `Colab_Sudoku.ipynb` is a Colab version of the harness. Code comments, docs and commit messages are a mix of Spanish (README, commits) and English (code).
+Sudoku evaluation harness for the course IIC3694-1 (Inteligencia Artificial Generativa): it loads a local Qwen model (default `Qwen/Qwen3.5-2B`), prompts it to solve a Sudoku, and verifies the answer. `Colab_Sudoku.ipynb` is a Colab version of the harness. Code comments, docs and commit messages are a mix of Spanish (README, commits) and English (code).
 
 ## Commands
 
@@ -19,7 +19,6 @@ python Laboratorio/Qwen3.5/dataset.py --out data/sudoku   # train/eval/test JSON
 python Laboratorio/Qwen3.5/baseline.py run --tasks data/sudoku/eval.jsonl --per-level 5 --n 8
 python Laboratorio/Qwen3.5/baseline.py summary results/*.jsonl
 python -m unittest discover -s Laboratorio/Qwen3.5 -p "test_*.py"
-cd informe_IIC3694 && latexmk -pdf -interaction=nonstopmode -halt-on-error informe.tex
 ```
 
 Tests use the standard-library `unittest` (`test_*.py` next to the modules); there is no configured linter. The modules in `Laboratorio/Qwen3.5/` use flat imports (`from config import ...`), so they must be run with that directory as the script directory (as `main.py` does), not as a package.
