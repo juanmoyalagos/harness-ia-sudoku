@@ -136,6 +136,21 @@ python Laboratorio/Qwen3.5/dataset.py --sizes 9 --train 200 --eval 50 --test 50 
 | `--train/--eval/--test N` | Tareas por tamaño y nivel | 50 / 10 / 10 |
 | `--seed N` | Semilla del dataset | 0 |
 | `--unique` / `--no-unique` | Exigir solución única | exigida |
+| `--test-grid levels\|cells` | `test` por niveles (`LEVELS`) o por cantidades fijas de casillas vacías (`n4`, `n8`, …; `TEST_CELLS`) | `levels` |
+
+### Datos generados
+
+`sudoku_data_traces.zip` contiene las particiones usadas en la evaluación
+(`sudoku/train.jsonl`, `eval.jsonl`, `test.jsonl`) y las trazas de SFT y DPO
+(`traces/sft.jsonl`, `traces/dpo.jsonl`; ver [TRAZAS.md](TRAZAS.md)). Para
+usarlos con las rutas por defecto:
+
+```sh
+unzip sudoku_data_traces.zip -d data      # crea data/sudoku/ y data/traces/
+```
+
+Las particiones del zip se reproducen de forma idéntica con
+`python Laboratorio/Qwen3.5/dataset.py --out data/sudoku --test 20 --test-grid cells`.
 
 Cada línea contiene `id`, `split`, `size`, `box_rows`, `box_columns`, `level`,
 `empty_cells` (contadas en el puzzle generado), `unique_solution`,

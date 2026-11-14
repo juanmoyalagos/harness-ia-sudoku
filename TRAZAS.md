@@ -1,8 +1,35 @@
 # Generación de trazas con Qwen3.5-9B (para SFT / DPO del 2B)
 
-Plan para generar trazas con `Qwen/Qwen3.5-9B` sobre `data/sudoku/train.jsonl`, que luego
-sirven para entrenar `Qwen/Qwen3.5-2B` con SFT y/o DPO. Este documento cubre solo la
+Cómo se generaron trazas con `Qwen/Qwen3.5-9B` sobre `data/sudoku/train.jsonl` para entrenar
+`Qwen/Qwen3.5-2B` con SFT y/o DPO, y cómo reproducirlo. Este documento cubre solo la
 **generación** y la construcción de los datasets de SFT/DPO; el entrenamiento va después.
+
+## Datos ya generados
+
+Los datos resultantes vienen en `sudoku_data_traces.zip`, en la raíz del repositorio:
+
+| Archivo | Contenido |
+|---|---|
+| `sudoku/train.jsonl` | 450 tareas (4x4, 6x6, 9x9 × easy/medium/hard, 50 c/u) |
+| `sudoku/eval.jsonl` | 90 tareas (10 por tamaño y nivel) |
+| `sudoku/test.jsonl` | 180 tareas (niveles fijos `n4` … `n50`, 20 por tamaño y nivel) |
+| `traces/sft.jsonl` | 498 ejemplos SFT |
+| `traces/dpo.jsonl` | 432 pares DPO (182 reales y 250 sintéticos) |
+
+Para usarlos con las rutas por defecto de los scripts (`data/` está en `.gitignore`):
+
+```sh
+unzip sudoku_data_traces.zip -d data      # crea data/sudoku/ y data/traces/
+```
+
+Las particiones también se pueden regenerar de forma idéntica, sin el zip:
+
+```sh
+python Laboratorio/Qwen3.5/dataset.py --out data/sudoku --test 20 --test-grid cells
+```
+
+Las respuestas crudas del 9B (los archivos de `baseline.py run`) no se incluyen; solo el
+resultado de `build_sft_dpo.py`. Para regenerarlas hay que seguir el procedimiento de abajo.
 
 ## Decisiones
 
@@ -31,7 +58,7 @@ Recomendación: **generar con 2 shots en formato `steps`, pero guardar el prompt
   `Step k: rXcY = v` más la rejilla y termina en `<answer>`. Esa traza es corta, uniforme y
   aprendible por un modelo de 2B, y reproduce el formato que ya usa `make_shots`.
 - **El prompt de entrenamiento no lleva shots.** El 2B se evalúa con el prompt base. Cada
-  ejemplo de SFT/DPO será `prompt de train.jsonl → completion`, de modo que el 2B aprende a
+  ejemplo de SFT/DPO es `prompt de train.jsonl → completion`, de modo que el 2B aprende a
   producir el estilo de los shots sin necesitar los ejemplos en contexto. Las trazas siguen
   cumpliendo el contrato de `parse_answer`, porque los shots no cambian el formato de
   respuesta.
@@ -44,28 +71,30 @@ Recomendación: **generar con 2 shots en formato `steps`, pero guardar el prompt
   formato igualmente limpio. El formato `compact` es una alternativa más corta si las trazas
   de 6x6 `medium` truncan a 4096; `seen` es más largo.
 
-## Cambio de código (hecho)
+## Opciones de `baseline.py run` usadas
 
-`baseline.py run` ya muestrea `n` completions por tarea, las puntúa con `reward_parts`
-(guarda `reward`, `reward_parts`, `finish_reason`, `generated_tokens` y `completion`) y
-reanuda si se interrumpe. Solo falta excluir **6x6 hard**: `--sizes` filtra por tamaño, pero
-no por nivel.
-
-- Implementado: `--skip SIZE:LEVEL [...]` (p. ej. `--skip 6:hard`), aplicado en
-  `select_tasks`, con pruebas en `test_baseline.py`. También `--shard I/K` para repartir las
-  tareas entre jobs paralelos.
-- Para este plan: `--sizes 4 6 --skip 6:hard`.
+- `--sizes 4 6 --skip 6:hard` deja solo el subconjunto de la tabla de decisiones
+  (`--skip SIZE:LEVEL` excluye pares tamaño/nivel).
+- `--shard I/K` (con `0 <= I < K`) corre solo una de cada `K` tareas, empezando por la `I`.
+  Sirve para repartir la corrida entre varias GPUs o procesos; cada shard necesita su propio
+  `--out`.
+- Si una corrida se interrumpe, repetir el mismo comando la reanuda. Reanudar sobre el mismo
+  archivo con otros ajustes se rechaza a propósito (`RUN_KEYS`).
 
 ## Procedimiento
 
-1. **Entorno** (una vez, en el nodo de login; ver `CLAUDE.local.md`):
-   `module load python/3.13 cuda/12.9`, crear `.venv`, instalar `requirements.txt`,
-   `export HF_HOME=$SCRATCH/hf`. El 9B en bf16 ocupa unos 18 GB y cabe en una L40S (48 GB).
-   **Nunca correr inferencia en el nodo de login**: usar `sbatch` con
-   `--account=aip-sheilam --gres=gpu:l40s:1`.
-2. **Filtro de niveles** (`--skip`, ya implementado en `baseline.py` con pruebas). Tests:
-   `python -m unittest discover -s Laboratorio/Qwen3.5 -p "test_*.py"`.
-3. **Piloto** (≤ 3 h, una sola L40S), un directorio de salida por variante:
+1. **Entorno.** Python 3.13, entorno virtual e instalación de dependencias
+   (ver `README.md`):
+   ```sh
+   python -m venv .venv && source .venv/bin/activate
+   python -m pip install -r requirements.txt
+   python -m unittest discover -s Laboratorio/Qwen3.5 -p "test_*.py"
+   ```
+   El 9B en bf16 ocupa unos 18 GB de pesos. Las corridas originales usaron una GPU NVIDIA
+   de 48 GB por proceso; con menos memoria, bajar `--batch-size`. Los pesos se descargan de
+   Hugging Face la primera vez (`HF_HOME` define dónde se guardan).
+2. **Datos.** Descomprimir el zip o regenerar las particiones (ver "Datos ya generados").
+3. **Piloto**, un directorio de salida por variante:
    ```sh
    COMMON="--tasks data/sudoku/train.jsonl --model-id Qwen/Qwen3.5-9B --no-thinking \
      --max-output-tokens 4096 --sizes 4 6 --skip 6:hard --per-level 5 --n 8"
@@ -73,27 +102,42 @@ no por nivel.
    python Laboratorio/Qwen3.5/baseline.py run $COMMON --shots 2 --out results/pilot/2shot
    python Laboratorio/Qwen3.5/baseline.py summary results/pilot/*/*.jsonl
    ```
-   Del piloto sale también el tiempo por muestra, para dimensionar la corrida completa.
-   Se lanza como dos jobs en paralelo, uno por variante:
-   `sbatch --job-name=pilot-0shot scripts/traces_pilot.sbatch` y
-   `sbatch --job-name=pilot-2shot --export=ALL,SHOTS=2 scripts/traces_pilot.sbatch`.
-4. **Corrida completa**: 2 shots, formato `steps`, en 5 jobs paralelos (job array de Slurm,
-   uno por shard). Cada shard toma una de cada 5 tareas (`--shard I/5`), así que todos
-   reciben las mismas 10 tareas por (tamaño, nivel) y tardan lo mismo (≈2 h, estimado con
-   el piloto: ≈2,4 min por tarea, ≈10 GPU-horas en total). Cada shard escribe en su propio
-   directorio:
+   Del piloto sale también el tiempo por muestra, para dimensionar la corrida completa. Las
+   dos variantes son independientes y se pueden correr en paralelo.
+4. **Corrida completa (r0)**: 2 shots, formato `steps`. En un solo proceso:
    ```sh
-   sbatch scripts/traces.sbatch      # results/traces/r0/shard{0..4}/
+   COMMON="--tasks data/sudoku/train.jsonl --model-id Qwen/Qwen3.5-9B --no-thinking \
+     --max-output-tokens 4096 --sizes 4 6 --skip 6:hard --n 8 --shots 2"
+   python Laboratorio/Qwen3.5/baseline.py run $COMMON --out results/traces/r0
    ```
-   Variables: `SHOTS`, `ROUND`, `SEED`, `SHOT_SEED`. Si un shard no termina en 3 h, repetir
-   el comando (o `sbatch --array=2 scripts/traces.sbatch`): reanuda donde quedó.
+   O repartida en 5 shards, por ejemplo uno por GPU. Cada shard toma una de cada 5 tareas,
+   así que todos reciben las mismas 10 tareas por (tamaño, nivel) y tardan lo mismo:
+   ```sh
+   for I in 0 1 2 3 4; do
+     CUDA_VISIBLE_DEVICES=$I python Laboratorio/Qwen3.5/baseline.py run $COMMON \
+       --shard $I/5 --out results/traces/r0/shard$I &
+   done
+   wait
+   ```
+   Como referencia, en una GPU NVIDIA L40S tomó ≈2,4 min por tarea (≈10 GPU-horas en total,
+   ≈2 h por shard). Si un shard se interrumpe, repetir su comando lo reanuda.
 5. **Revisar la cobertura** con `summary`: por (tamaño, nivel) la tasa de aprobación, la tasa
    de truncamiento y la media de tokens. Esto indica cuántas tareas tienen aprobadas (SFT) y
    cuántas tienen aprobadas y fallidas a la vez (pares DPO).
+   ```sh
+   python Laboratorio/Qwen3.5/baseline.py summary results/traces/r0/*.jsonl      # un proceso
+   python Laboratorio/Qwen3.5/baseline.py summary results/traces/r0/shard*/*.jsonl   # shards
+   ```
 6. **Rondas extra si falta cobertura** (típicamente 6x6 medium): volver a correr con otro
    `--seed` y, si se quiere diversidad de shots, otro `--shot-seed`, siempre en un `--out`
-   nuevo (`results/traces/r1`, ...). Reanudar sobre el mismo archivo con otros ajustes se
-   rechaza a propósito (`RUN_KEYS`).
+   nuevo. La ronda r1 usada aquí fue:
+   ```sh
+   python Laboratorio/Qwen3.5/baseline.py run --tasks data/sudoku/train.jsonl \
+     --model-id Qwen/Qwen3.5-9B --no-thinking --max-output-tokens 4096 --n 8 --shots 2 \
+     --sizes 6 --skip 6:hard --temperature 1.0 --seed 1 --shot-seed 1 \
+     --out results/traces/r1
+   ```
+7. **Construir los datasets** (ver la sección siguiente).
 
 ## Qué queda registrado por muestra
 
@@ -105,7 +149,7 @@ en los datos de entrenamiento.
 
 ## Resultados
 
-### Piloto (5 tareas por nivel, `n = 8`, un job por variante, ≈1 h cada uno)
+### Piloto (5 tareas por nivel, `n = 8`)
 
 | Tablero / nivel | pass@1 0 shots | pass@1 2 shots | truncadas 0 / 2 shots | tokens medios 0 / 2 shots |
 |---|---|---|---|---|
@@ -120,9 +164,7 @@ más cortas y truncan menos, así que se eligió **2 shots, formato `steps`**. C
 solo 5 tareas (40 muestras): los resultados son indicativos. Tiempo medido: ≈2,4 min por
 tarea (1,0 min en 4x4 easy hasta 3,5 min en 6x6 medium).
 
-### Corrida completa (r0: 250 tareas, 2000 muestras, 5 shards, ≈1 h 55 min cada uno)
-
-Job array `7563963`; los 5 shards terminaron `COMPLETED` (1 h 48 min – 1 h 57 min).
+### Corrida completa (r0: 250 tareas, 2000 muestras, 5 shards)
 
 | Tablero / nivel | pass@1 | pass@8 | truncadas | tokens medios |
 |---|---|---|---|---|
@@ -143,8 +185,7 @@ Job array `7563963`; los 5 shards terminaron `COMPLETED` (1 h 48 min – 1 h 57 
 
 ### Ronda extra r1 (100 tareas 6x6, 800 muestras, temperatura 1.0, `--seed 1`, `--shot-seed 1`)
 
-Job array `7570605`, 5 shards, todos `COMPLETED` (1 h 5 min – 1 h 15 min). El objetivo era
-conseguir más pares DPO con rechazados de rejilla errónea.
+El objetivo era conseguir más pares DPO con rechazados de rejilla errónea.
 
 | Tablero / nivel | pass@1 | truncadas | tokens medios |
 |---|---|---|---|
@@ -157,9 +198,9 @@ rechazados de ese tipo (30 → 36 en total con cap 2).
 
 ## Construcción de los datasets
 
-`Laboratorio/Qwen3.5/build_sft_dpo.py` lee los shards, recupera el prompt de `train.jsonl`
-por `task_id` (sin shots) y escribe `sft.jsonl` y `dpo.jsonl`. Rechaza muestras que no sean
-del split `train`.
+`Laboratorio/Qwen3.5/build_sft_dpo.py` lee los resultados (archivos o directorios, que
+recorre de forma recursiva), recupera el prompt de `train.jsonl` por `task_id` (sin shots) y
+escribe `sft.jsonl` y `dpo.jsonl`. Rechaza muestras que no sean del split `train`.
 
 ```sh
 python Laboratorio/Qwen3.5/build_sft_dpo.py --results results/traces/r0 results/traces/r1 \
@@ -194,8 +235,8 @@ python Laboratorio/Qwen3.5/build_sft_dpo.py --results results/traces/r0 results/
   De los 182 pares reales, 36 tienen un rechazado con rejilla errónea y 146 uno truncado.
   Solo con r0 y sin sintéticos eran 492 ejemplos SFT y 148 pares reales (30 con rejilla
   errónea).
-- Los archivos quedan en `data/traces/`, ignorado por git. Hay tests en
-  `test_build_sft_dpo.py`.
+- Los archivos quedan en `data/traces/` (ignorado por git; la versión usada está en
+  `sudoku_data_traces.zip`). Hay tests en `test_build_sft_dpo.py`.
 
 ## Siguientes pasos
 
@@ -203,9 +244,10 @@ python Laboratorio/Qwen3.5/build_sft_dpo.py --results results/traces/r0 results/
    librería elegida; los campos son strings simples).
 2. **Pares DPO:** ya generados con rechazados sintéticos (ver arriba). Subir
    `--max-pairs-per-task` a 3 da 52 pares reales más, casi todos con rechazado truncado.
-3. **Rechazados on-policy del 2B tras el SFT** (opcional, mejor calidad que los sintéticos): muestrear el 2B ya entrenado sobre las mismas
-   tareas y emparejar sus fallos (sobre todo rejillas erróneas) con las trazas correctas del
-   9B. Es la fuente de mejor calidad para DPO y el 2B es mucho más rápido que el 9B.
+3. **Rechazados on-policy del 2B tras el SFT** (opcional, mejor calidad que los sintéticos):
+   muestrear el 2B ya entrenado sobre las mismas tareas y emparejar sus fallos (sobre todo
+   rejillas erróneas) con las trazas correctas del 9B. Es la fuente de mejor calidad para DPO
+   y el 2B es mucho más rápido que el 9B.
 4. **Descartado:** otra ronda del 9B para más rechazados erróneos. r1 (temperatura 1.0) apenas
    aportó 6 y el 9B falla casi siempre por truncamiento.
 5. **Evaluación:** el 2B se evalúa con `baseline.py` sobre `eval.jsonl` con los mismos
@@ -221,5 +263,6 @@ python Laboratorio/Qwen3.5/build_sft_dpo.py --results results/traces/r0 results/
 - **Truncamiento a 4096 tokens (confirmado).** Afecta al 34% de 6x6 medium y al 10% de 6x6
   easy, y explica el 86% de los fallos. Una alternativa es el formato `compact` (no
   probado).
-- **Mismo generador que el test.** Las semillas impiden compartir puzzles entre splits, pero
-  conviene verificar que ningún prompt de `train.jsonl` aparezca en `eval.jsonl`/`test.jsonl`.
+- **Mismo generador que el test.** Las semillas impiden compartir puzzles entre splits, y se
+  verificó que ningún prompt ni puzzle de `train.jsonl` aparece en `eval.jsonl` ni en
+  `test.jsonl`.
